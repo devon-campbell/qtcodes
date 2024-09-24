@@ -6,7 +6,7 @@ import os
 from .circuits import *
 from .fitters import *
 from .common import *
-from .tools import *
+from tools import *
 
 with open(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "VERSION.txt")), "r"

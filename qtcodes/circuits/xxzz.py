@@ -11,9 +11,7 @@ from qtcodes.circuits.base import (
 )
 from qtcodes.circuits.rotated_surface import _RotatedLattice, RotatedQubit
 
-
 TQubit = Tuple[float, float, float]
-
 
 class _XXXX(_Stabilizer):
     """

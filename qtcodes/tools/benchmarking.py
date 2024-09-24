@@ -8,17 +8,14 @@ import glob
 
 import numpy as np
 import matplotlib.pyplot as plt
-
-from qiskit import execute, Aer, QuantumCircuit
+from qiskit import transpile, QuantumCircuit, assemble
+from qiskit_aer import Aer
 from tqdm import tqdm
 
 from typing import Dict, Optional, List
-
-
-plt.rcParams.update({"font.size": 14, "pdf.fonttype": 42, "ps.fonttype": 42})
-
 from multiprocessing import Pool
 
+plt.rcParams.update({"font.size": 14, "pdf.fonttype": 42, "ps.fonttype": 42})
 
 class TopologicalBenchmark:
     def __init__(
@@ -99,17 +96,20 @@ class TopologicalBenchmark:
         )  # higher physical_error_rate readout is slower to decode, gives more accurate tqdm estimate
         pbar = tqdm(physical_error_rates)
         for physical_error_rate in pbar:
-            results = (
-                execute(
-                    self.circ,
-                    Aer.get_backend("aer_simulator"),
-                    noise_model=self.noise_model_func(physical_error_rate),
-                    optimization_level=0,
-                    shots=shots,
-                )
-                .result()
-                .get_counts()
+            # Transpile the circuit
+            transpiled_circ = transpile(
+                self.circ,
+                basis_gates=['u1', 'u2', 'u3', 'cx'],  # Add or modify basis gates as needed
+                optimization_level=0
             )
+            # Assemble the circuit
+            qobj = assemble(
+                transpiled_circ,
+                shots=shots
+            )
+            # Simulate the circuit
+            simulator = Aer.get_backend("aer_simulator")
+            results = simulator.run(qobj, noise_model=self.noise_model_func(physical_error_rate)).result().get_counts()
             logical_error_rate_value = self.logical_error_rate(
                 results, err_prob=physical_error_rate if deg_weight else None
             )
@@ -133,7 +133,7 @@ class TopologicalBenchmark:
         shots: int = 2048,
     ) -> None:
         """
-        Multi-processed weep physical error rates and calculate the associated logical error rate.
+        Multi-processed sweep physical error rates and calculate the associated logical error rate.
 
         Args:
             physical_error_rates (Optional[List[float]]):
@@ -177,17 +177,20 @@ class TopologicalBenchmark:
                 Shots in the circuit simulation.
 
         """
-        results = (
-            execute(
-                self.circ,
-                Aer.get_backend("aer_simulator"),
-                noise_model=self.noise_model_func(physical_error_rate),
-                optimization_level=0,
-                shots=shots,
-            )
-            .result()
-            .get_counts()
+        # Transpile the circuit
+        transpiled_circ = transpile(
+            self.circ,
+            basis_gates=['u1', 'u2', 'u3', 'cx'],  # Add or modify basis gates as needed
+            optimization_level=0
         )
+        # Assemble the circuit
+        qobj = assemble(
+            transpiled_circ,
+            shots=shots
+        )
+        # Simulate the circuit
+        simulator = Aer.get_backend("aer_simulator")
+        results = simulator.run(qobj, noise_model=self.noise_model_func(physical_error_rate)).result().get_counts()
         logical_error_rate_value = self.logical_error_rate(
             results, err_prob=physical_error_rate
         )
@@ -226,10 +229,10 @@ class TopologicalAnalysis:
 
     def load_data(self):
         data = np.load(self.filename)
-        self.params["d"] = (int(data["d"][0]), (data["d"][1]))
+        self.params["d"] = (int(data["d"][0]), int(data["d"][1]))
         self.params["T"] = int(data["T"])
-        self.data["physical_error_rates"] = data["physical_error_rates"]  # TODO
-        self.data["logical_error_rates"] = data["logical_error_rates"]  # TODO
+        self.data["physical_error_rates"] = data["physical_error_rates"]
+        self.data["logical_error_rates"] = data["logical_error_rates"]
 
     def plot(self, fig=None, ax=None, log=True, per_round=False, **kwargs):
         if fig is None:
@@ -258,7 +261,7 @@ class TopologicalBatchAnalysis:
             self.analyses.append(TopologicalAnalysis(filename))
             self.analyses[-1].load_data()
 
-        # sort analysis by increasing "d"
+        # Sort analysis by increasing "d"
         sorted_indxs = np.argsort(
             np.array([analysis.params["d"][0] for analysis in self.analyses])
         )
@@ -298,4 +301,3 @@ class TopologicalBatchAnalysis:
                 self.dirname + "comparison" + ("_log" if log_plot else "") + ".png"
             )
             plt.show()
-

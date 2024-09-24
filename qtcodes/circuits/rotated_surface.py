@@ -524,8 +524,11 @@ class RotatedQubit(TopologicalQubit[TQubit], metaclass=ABCMeta):
                     + num_syn[self.lattice.SYNX]
                 ],
             )
+
         if num_syn[self.lattice.SYNZ] > 0:
             self.circ.reset(self.lattice.qregisters["mz"])
         if num_syn[self.lattice.SYNX] > 0:
             self.circ.reset(self.lattice.qregisters["mx"])
         self.circ.barrier()
+
+  
