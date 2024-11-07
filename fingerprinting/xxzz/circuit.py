@@ -28,7 +28,7 @@ class IgnoreMessagesFilter(logging.Filter):
 # Set up logging configuration
 logging.basicConfig(
     level=logging.INFO,
-    filename='output_day2.log',  # Specify your log file name here
+    filename='output.log',  # Specify your log file name here
     filemode='w',           # 'w' for overwriting, 'a' for appending
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
@@ -38,13 +38,11 @@ logger.addFilter(IgnoreMessagesFilter())
 
 
 global api_token, service, backends
+#api_token = 'be5e713d2a8fa9228e96fbb61a84af3337e4730a2d7a174eaeeb8c625f964b516a29f367490a0fa50ec5de4dff1be879e018c6f87e906a15b379519049c9868a'
 api_token = 'be5e713d2a8fa9228e96fbb61a84af3337e4730a2d7a174eaeeb8c625f964b516a29f367490a0fa50ec5de4dff1be879e018c6f87e906a15b379519049c9868a'
-
 service = QiskitRuntimeService(channel="ibm_quantum", token=api_token)
-#backends = [service.backends()[1]]
 
-def run_on_backend(qubit, backend):
-    result = {}
+def run_on_backend(qubit, backend, date):
     qpy_file = f'data/{qubit.name}_{backend.name}.qpy'
     
     try:
@@ -66,9 +64,9 @@ def run_on_backend(qubit, backend):
             logging.info(f'*\t\tSaved transpiled circuit to {qpy_file}')
 
         # Prepare backend mapping for three different layouts
-        backend_mapping = {}
         for mapping_label in ["A", "B", "C"]:     
             layout_file = f'data/{qubit.name}_{backend.name}_{mapping_label}_layout.json' 
+            result_file = f'data/{qubit.name}_{backend.name}_{mapping_label}_{date}_result.json'
             
             # Load existing layout if it exists, else create a new random layout
             if os.path.exists(layout_file):
@@ -78,7 +76,7 @@ def run_on_backend(qubit, backend):
             else:
                 # Generate a random layout for the new transpilation
                 random_layout = np.random.permutation(backend.num_qubits)[:qc.num_qubits]
-                backend_mapping[backend.name] = random_layout.tolist()
+                backend_mapping = {backend.name: random_layout.tolist()}
                 logging.info(f'*\tGenerated random layout for {backend.name}: {random_layout}')
 
                 # Save backend mappings (layouts) to the JSON file
@@ -86,25 +84,25 @@ def run_on_backend(qubit, backend):
                     json.dump(backend_mapping, layout_f, indent=4)
                 logging.info(f'*\tSaved backend layouts to {layout_file}')
 
-            # Use the layout (existing or newly generated) for transpilation
-            qc_mapped = transpile(qc, backend, initial_layout=backend_mapping[backend.name], optimization_level=0)
-            logging.info(f'*\tRunning job with mapping {mapping_label}...')
+            if not os.path.exists(result_file):
+                # Use the layout (existing or newly generated) for transpilation
+                qc_mapped = transpile(qc, backend, initial_layout=backend_mapping[backend.name], optimization_level=0)
+                logging.info(f'*\tRunning job with mapping {mapping_label}...')
 
-            # Run the job on the backend
-            job = backend.run(qc_mapped, memory=True, shots=5000, job_tags=[f"{qubit.name}_{backend.name}_{mapping_label}"])
-            result_counts = job.result().get_counts()
-            logging.info(f'*\t\tGot results for mapping {mapping_label}!')
+                # Run the job on the backend
+                job = backend.run(qc_mapped, memory=True, shots=5000, job_tags=[f"{qubit.name}_{backend.name}_{mapping_label}_{date}"])
+                result_counts = job.result().get_counts()
+                logging.info(f'*\t\tGot results for mapping {mapping_label}!')
 
-            # Store result counts in the dictionary
-            result[f"{backend.name}_{mapping_label}"] = result_counts
-            logging.info(f'*\t\tStored result for {backend.name} with mapping {mapping_label}')
+                # Store result counts in an individual JSON file
+                with open(result_file, 'w') as rf:
+                    json.dump({f"{backend.name}_{mapping_label}_{date}": result_counts}, rf, indent=4)
+                logging.info(f'*\t\tSaved result to {result_file}')
 
     except Exception as e:
         logging.error(f'Error while running on backend {backend.name}: {str(e)}')
 
-    return result
-
-def run_circ(qubit_name, backends):
+def run_circ(qubit_name, backends, date):
     # Load the qubit object from the pickle file
     pkl_file = f'data/{qubit_name}.pkl'
     try:
@@ -115,52 +113,39 @@ def run_circ(qubit_name, backends):
         logging.error(f"Failed to load qubit from {pkl_file}: {e}")
         return
 
-    results = {}
-    # Open a backup file to write results incrementally
-    with open(f'{qubit.name}_backup_day2.txt', 'a') as backup_file:
+    # Use ThreadPoolExecutor to run the function on each backend concurrently
+    with ThreadPoolExecutor() as executor:
+        futures = {executor.submit(run_on_backend, qubit, backend, date): backend for backend in backends}
+        for future in as_completed(futures):
+            backend = futures[future]
+            try:
+                future.result()
+                logging.info(f'*Processed backend {backend.name}')
+            except Exception as e:
+                logging.error(f'Error while processing {backend.name}: {e}')
+                
+    logging.info(f'*All results have been saved in individual JSON files with date {date}.')
 
-        # Use ThreadPoolExecutor to run the function on each backend concurrently
-        with ThreadPoolExecutor() as executor:
-            futures = {executor.submit(run_on_backend, qubit, backend): backend for backend in backends}
-            for future in as_completed(futures):
-                backend = futures[future]
-                try:
-                    result = future.result()
-                    if result:
-                        results.update(result)
-                        # Write the result to the backup file immediately
-                        for mapping_label in ["A", "B", "C"]:
-                            if f"{backend.name}_{mapping_label}" in result:
-                                backup_file.write(f'{backend.name}_{mapping_label}: {result[f"{backend.name}_{mapping_label}"]}\n')
-                        backup_file.flush()
-                        logging.info(f'*Backup stored for {backend.name}')
-                except Exception as e:
-                    logging.error(f'Error while processing {backend.name}: {e}')
-
-    # After processing all backends, write the results to the JSON file
-    with open(f'{qubit.name}_results_day2.json', 'w') as f:
-        json.dump(results, f, indent=4)
-    logging.info(f'*Stored results in: {qubit.name}_results_day2.json')
-    
-def main(qubit_name, backends):
+def main(qubit_name, backends, date):
     # Ensure logging is set up
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
   
     # Run the circuit with the given qubit and backends
-    run_circ(qubit_name, backends)
+    run_circ(qubit_name, backends, date)
 
 if __name__ == "__main__":
-    # Set up argument parsing for the qubit name and backends
+    # Set up argument parsing for the qubit name, date, and backends
     parser = argparse.ArgumentParser(description="Run quantum circuit on multiple backends with specified mappings.")
     parser.add_argument("qubit_name", type=str, help="Name of the qubit (used to load/save files).")
+    parser.add_argument("date", type=str, help="Date to append to the filenames for unique identification.")
     parser.add_argument("--backends", nargs="*", type=str, help="Space-separated list of backends to use (optional).")
 
     args = parser.parse_args()
     
-    backends =  service.backends()[:-1]
+    backends = service.backends()[:-1]
     # Filter available backends based on user input, if provided
     if args.backends:
         backends = [backend for backend in backends if backend.name in args.backends]
     logging.info(backends)
 
-    main(args.qubit_name, backends)
+    main(args.qubit_name, backends, args.date)
